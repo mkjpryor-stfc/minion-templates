@@ -1,0 +1,94 @@
+description: >-
+  Create Kantree cards in a project for each open issue in a GitHub repository.
+
+parameters:
+  github.repository_name:
+    hint: Name of the GitHub repository to read issues from
+    example: cedadev/jasmin-cloud
+  kantree.project_name:
+    hint: Name of the Kantree project to create cards in
+    example: My Project Name
+
+spec:
+  functionRef:
+    path: minion.functions.compose
+    functions:
+      - functionRef:
+          path: minion.connectors.github.issues_for_repository
+          session:
+            connectorRef: "github"
+          repository_name:
+            parameterRef: "github.repository_name"
+
+      # Filter out the pull requests
+      - functionRef:
+          path: minion.functions.select
+          predicate:
+            functionRef:
+              path: minion.functions.expression
+              expression: "not input.pull_request|default(none)"
+
+      # The output of this step is a tuple containing two iterables - (issues, existing cards)
+      - functionRef:
+          path: minion.functions.fork_join
+          functions:
+            - functionRef:
+                path: minion.functions.identity
+            - functionRef:
+                path: minion.connectors.kantree.cards_for_project
+                session:
+                  connectorRef: "kantree"
+                project_name:
+                  parameterRef: "kantree.project_name"
+
+      # The output of this step is an iterable of (issue, matching card) tuples
+      # If there is no matching card in the project, it is None
+      - functionRef:
+          path: minion.functions.zip_matching
+          matcher:
+            functionRef:
+              path: minion.functions.expression
+              # Getting the attached URLs for a card is pretty contrived
+              expression: >-
+                input.0.html_url in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
+
+      # Throw away the tuples which already have a card
+      - functionRef:
+          path: minion.functions.select
+          predicate:
+            functionRef:
+              path: minion.functions.expression
+              expression: "input.1 is none"
+
+      # Map each (issue, card) tuple onto the card structure we want to create
+      - functionRef:
+          path: minion.functions.collect
+          function:
+            functionRef:
+              path: minion.functions.template
+              globals:
+                repository_name:
+                  parameterRef: "github.repository_name"
+              template: |
+                title: >-
+                  {{ input.0.title }}
+                {%- if "bug" in input.0.labels|map(attribute="name") %}
+                model_name: Bug
+                {%- endif %}
+                attributes:
+                  - name: "Attachments"
+                    value: {{ input.0.html_url }}
+                groups:
+                  - type: "Components"
+                    name: {{ repository_name.split("/", 1)[1] }}
+
+      # Create the card
+      - functionRef:
+          path: minion.functions.collect
+          function:
+            functionRef:
+              path: minion.connectors.kantree.create_card
+              session:
+                connectorRef: "kantree"
+              project_name:
+                parameterRef: "kantree.project_name"

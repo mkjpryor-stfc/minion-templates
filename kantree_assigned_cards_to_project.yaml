@@ -1,0 +1,69 @@
+description: Mirror assigned Kantree cards to a Kantree project.
+
+parameters:
+  kantree.project_name:
+    hint: Kantree project to mirror cards into.
+    example: My Personal Tasks
+
+spec:
+  functionRef:
+    path: minion.functions.compose
+    functions:
+      - functionRef:
+          path: minion.connectors.kantree.cards_assigned_to_user
+          session:
+            connectorRef: kantree
+
+      # The output of this step is a tuple containing two iterables - (assigned cards, cards on board)
+      - functionRef:
+          path: minion.functions.fork_join
+          functions:
+            - functionRef: { path: minion.functions.identity }
+            - functionRef:
+                path: minion.connectors.kantree.cards_for_project
+                session:
+                  connectorRef: kantree
+                project_name:
+                  parameterRef: "kantree.project_name"
+
+      # The output of this step is an iterable of (assigned card, matching card in project) tuples
+      # If there is no matching card in the project, it is None
+      - functionRef:
+          path: minion.functions.zip_matching
+          matcher:
+            functionRef:
+              path: minion.functions.expression
+              expression: "input.1.is_link and input.0.id == input.1.link.id"
+
+      # Throw away the tuples which already have a card
+      - functionRef:
+          path: minion.functions.select
+          predicate:
+            functionRef:
+              path: minion.functions.expression
+              expression: "input.1 is none"
+
+      # Map the remaining tuples onto a mirror card structure
+      - functionRef:
+          path: minion.functions.collect
+          function:
+            functionRef:
+              path: minion.functions.template
+              template: |
+                link_to: {{ input.0.id }}
+                link_has_own_attributes: "false"
+                groups:
+                  - type: "Projects"
+                    name: >-
+                      {{ input.0.project.title }}
+
+      # Create the cards
+      - functionRef:
+          path: minion.functions.collect
+          function:
+            functionRef:
+              path: minion.connectors.kantree.create_card
+              session:
+                connectorRef: kantree
+              project_name:
+                parameterRef: "kantree.project_name"

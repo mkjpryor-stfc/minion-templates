@@ -1,0 +1,141 @@
+description: >-
+  Create Kantree cards in a project for each assigned Help Scout conversation
+  in a mailbox.
+
+  Cards for existing conversations will be moved to a group indicating action
+  is required.
+
+
+parameters:
+  helpscout.mailbox_name:
+    hint: The name of the Help Scout mailbox to fetch conversations from.
+    default: CEDA and JASMIN Helpdesk
+  kantree.project_name:
+    hint: The name of the Kantree project to create cards in.
+    example: My Kantree Project
+  kantree.groups:
+    hint: |
+      A list of Kantree "groups", or "contexts", to apply to created cards.
+      Should be formatted as a YAML list containing mappings of the form
+      { type: <context name>, name: <group name> }.
+    example: "[{type: Lists, name: Priority}, {type: Projects, name: Support}]"
+    default: "[]"
+
+
+spec:
+  functionRef:
+    path: minion.functions.compose
+    functions:
+      - functionRef:
+          path: minion.connectors.helpscout.conversations_assigned_to_user
+          session:
+            connectorRef: "helpscout"
+          mailbox_name:
+            parameterRef: "helpscout.mailbox_name"
+
+      # The output of this step is a tuple containing two iterables - (conversations, cards)
+      - functionRef:
+          path: minion.functions.fork_join
+          functions:
+            - functionRef:
+                path: minion.functions.identity
+            - functionRef:
+                path: minion.connectors.kantree.cards_for_project
+                session:
+                  connectorRef: "kantree"
+                project_name:
+                  parameterRef: "kantree.project_name"
+                # Don't include archived cards
+                # This means that if a card for a conversation has been archived,
+                # a new one will be created
+                with_archived: false
+
+      # The output of this step is an iterable of (conversation, matching card) tuples
+      # If there is no matching card in the project, it is None
+      - functionRef:
+          path: minion.functions.zip_matching
+          matcher:
+            functionRef:
+              path: minion.functions.compose
+              functions:
+                # Map input[0] to the URL for the conversation
+                - functionRef:
+                    path: minion.functions.expression
+                    expression: >-
+                      ["https://secure.helpscout.net/conversation/%s/%s"|format(input.0.id, input.0.number), input.1]
+                - functionRef:
+                    path: minion.functions.expression
+                    # Getting the attached URLs for a card is pretty contrived
+                    expression: >-
+                      input.0 in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
+
+      # Create or update the card as required
+      - functionRef:
+          path: minion.functions.where
+          condition:
+            functionRef:
+              path: minion.functions.expression
+              expression: "input.1 is none"
+          # If the conversation has no card, create it
+          then:
+            functionRef:
+              path: minion.functions.compose
+              functions:
+                - functionRef:
+                    path: minion.functions.template
+                    template: |
+                      title: >-
+                        {{ input.0.subject }}
+                      model_name: Support Ticket
+                      attributes:
+                        - name: "Attachments"
+                          value: https://secure.helpscout.net/conversation/{{ input.0.id }}/{{ input.0.number }}
+                      groups:
+                      {% for group in groups %}
+                        - type: {{ group.type }}
+                          name: {{ group.name }}
+                      {% else %}
+                        []
+                      {% endfor %}
+                    globals:
+                      groups:
+                        parameterRef: "kantree.groups"
+                - functionRef:
+                    path: minion.connectors.kantree.create_card
+                    session:
+                      connectorRef: "kantree"
+                    project_name:
+                      parameterRef: "kantree.project_name"
+          # If it already has a card, move it to the specified group
+          default:
+            functionRef:
+              path: minion.functions.compose
+              functions:
+                # The output of this step is a (card, updates) tuple
+                - functionRef:
+                    path: minion.functions.fork_join
+                    functions:
+                      - functionRef:
+                          path: minion.functions.expression
+                          expression: "input.1"
+                      - functionRef:
+                          path: minion.functions.template
+                          template: |
+                            title: >-
+                              {{ input.0.subject }}
+                            model_name: Support Ticket
+                            state: Undecided
+                            groups:
+                            {% for group in groups %}
+                              - type: {{ group.type }}
+                                name: {{ group.name }}
+                            {% else %}
+                              []
+                            {% endfor %}
+                          globals:
+                            groups:
+                              parameterRef: "kantree.groups"
+                - functionRef:
+                    path: minion.connectors.kantree.update_card
+                    session:
+                      connectorRef: "kantree"
