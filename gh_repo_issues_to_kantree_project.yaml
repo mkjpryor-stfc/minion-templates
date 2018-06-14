@@ -1,7 +1,5 @@
 description: >-
   Create Kantree cards in a project for each open issue in a GitHub repository.
-  
-  Testing.
 
 parameters:
   github.repository_name:
