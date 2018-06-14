@@ -8,6 +8,11 @@ parameters:
   kantree.project_name:
     hint: Name of the Kantree project to create cards in
     example: My Project Name
+  kantree.context_name:
+    hint: >-
+      Name of a context in the Kantree project - a new group will be created
+      with the repository name
+    default: Components
 
 spec:
   functionRef:
@@ -69,6 +74,8 @@ spec:
               globals:
                 repository_name:
                   parameterRef: "github.repository_name"
+                context_name:
+                  parameterRef: "kantree.context_name"
               template: |
                 title: >-
                   {{ input.0.title }}
@@ -79,7 +86,7 @@ spec:
                   - name: "Attachments"
                     value: {{ input.0.html_url }}
                 groups:
-                  - type: "Components"
+                  - type: {{ context_name }}
                     name: {{ repository_name.split("/", 1)[1] }}
 
       # Create the card

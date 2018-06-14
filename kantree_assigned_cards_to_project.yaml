@@ -4,6 +4,11 @@ parameters:
   kantree.project_name:
     hint: Kantree project to mirror cards into.
     example: My Personal Tasks
+  kantree.context_name:
+    hint: >-
+      Name of a context in the Kantree project - a new group will be created
+      for each project that a card is mirrored from
+    default: Projects
 
 spec:
   functionRef:
@@ -49,11 +54,14 @@ spec:
           function:
             functionRef:
               path: minion.functions.template
+              globals:
+                context_name:
+                  parameterRef: "kantree.context_name"
               template: |
                 link_to: {{ input.0.id }}
                 link_has_own_attributes: "false"
                 groups:
-                  - type: "Projects"
+                  - type: {{ context_name }}
                     name: >-
                       {{ input.0.project.title }}
 

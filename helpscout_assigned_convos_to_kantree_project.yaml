@@ -15,7 +15,7 @@ parameters:
     example: My Kantree Project
   kantree.groups:
     hint: |
-      A list of Kantree "groups", or "contexts", to apply to created cards.
+      A list of Kantree groups to apply to created cards.
       Should be formatted as a YAML list containing mappings of the form
       { type: <context name>, name: <group name> }.
     example: "[{type: Lists, name: Priority}, {type: Projects, name: Support}]"
