@@ -35,7 +35,7 @@ spec:
 
       # The output of this step is a tuple containing two iterables - (conversations, cards)
       - functionRef:
-          path: minion.functions.fork_join
+          path: minion.functions.fork
           functions:
             - functionRef:
                 path: minion.functions.identity
@@ -113,7 +113,7 @@ spec:
               functions:
                 # The output of this step is a (card, updates) tuple
                 - functionRef:
-                    path: minion.functions.fork_join
+                    path: minion.functions.fork
                     functions:
                       - functionRef:
                           path: minion.functions.expression

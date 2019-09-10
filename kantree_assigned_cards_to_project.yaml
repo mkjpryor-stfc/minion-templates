@@ -19,9 +19,17 @@ spec:
           session:
             connectorRef: kantree
 
-      # The output of this step is a tuple containing two iterables - (assigned cards, cards on board)
+      # Ignore any cards that are links themselves
       - functionRef:
-          path: minion.functions.fork_join
+          path: minion.functions.select
+          predicate:
+            functionRef:
+              path: minion.functions.expression
+              expression: "not input.is_link"
+
+      # The output of this step is a tuple containing two iterables - (assigned cards, cards on board)
+      - functionRef:
+          path: minion.functions.fork
           functions:
             - functionRef: { path: minion.functions.identity }
             - functionRef:
@@ -31,8 +39,8 @@ spec:
                 project_name:
                   parameterRef: "kantree.project_name"
 
-      # The output of this step is an iterable of (assigned card, matching card in project) tuples
-      # If there is no matching card in the project, it is None
+      # The output of this step is an iterable of (assigned card, matching card in project) tuples
+      # If there is no matching card in the project, it is None
       - functionRef:
           path: minion.functions.zip_matching
           matcher:
@@ -40,7 +48,7 @@ spec:
               path: minion.functions.expression
               expression: "input.1.is_link and input.0.id == input.1.link.id"
 
-      # Throw away the tuples which already have a card
+      # Throw away the tuples which already have a card
       - functionRef:
           path: minion.functions.select
           predicate:
@@ -48,7 +56,7 @@ spec:
               path: minion.functions.expression
               expression: "input.1 is none"
 
-      # Map the remaining tuples onto a mirror card structure
+      # Map the remaining tuples onto a mirror card structure
       - functionRef:
           path: minion.functions.collect
           function:
@@ -65,7 +73,7 @@ spec:
                     name: >-
                       {{ input.0.project.title }}
 
-      # Create the cards
+      # Create the cards
       - functionRef:
           path: minion.functions.collect
           function:

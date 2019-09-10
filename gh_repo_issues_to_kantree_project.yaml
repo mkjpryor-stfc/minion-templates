@@ -35,7 +35,7 @@ spec:
 
       # The output of this step is a tuple containing two iterables - (issues, existing cards)
       - functionRef:
-          path: minion.functions.fork_join
+          path: minion.functions.fork
           functions:
             - functionRef:
                 path: minion.functions.identity
