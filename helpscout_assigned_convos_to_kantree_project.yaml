@@ -18,8 +18,18 @@ parameters:
       A list of Kantree groups to apply to created cards.
       Should be formatted as a YAML list containing mappings of the form
       { type: <context name>, name: <group name> }.
-    example: "[{type: Lists, name: Priority}, {type: Projects, name: Support}]"
-    default: "[]"
+    example: "[{type: Projects, name: Support}]"
+    default: []
+  kantree.active_group:
+    hint: |
+      A Kantree group to apply to active conversations.
+      Should be a YAML map of the form {type: <context name>, name: <group name>}.
+    default: {type: Lists, name: Priority}
+  kantree.closed_group:
+    hint: |
+      A Kantree group to apply to closed conversations.
+      Should be a YAML map of the form {type: <context name>, name: <group name>}.
+    default: {type: Lists, name: Done}
 
 
 spec:
@@ -33,7 +43,7 @@ spec:
           mailbox_name:
             parameterRef: "helpscout.mailbox_name"
 
-      # The output of this step is a tuple containing two iterables - (conversations, cards)
+      # The output of this step is a tuple containing two iterables - (conversations, cards)
       - functionRef:
           path: minion.functions.fork
           functions:
@@ -45,51 +55,52 @@ spec:
                   connectorRef: "kantree"
                 project_name:
                   parameterRef: "kantree.project_name"
-                # Don't include archived cards
-                # This means that if a card for a conversation has been archived,
-                # a new one will be created
-                with_archived: false
 
-      # The output of this step is an iterable of (conversation, matching card) tuples
-      # If there is no matching card in the project, it is None
+      # The output of this step is an iterable of (issue, matching card) tuples
+      # If there is no matching card in the project, it is None
       - functionRef:
           path: minion.functions.zip_matching
           matcher:
             functionRef:
-              path: minion.functions.compose
-              functions:
-                # Map input[0] to the URL for the conversation
-                - functionRef:
-                    path: minion.functions.expression
-                    expression: >-
-                      ["https://secure.helpscout.net/conversation/%s/%s"|format(input.0.id, input.0.number), input.1]
-                - functionRef:
-                    path: minion.functions.expression
-                    # Getting the attached URLs for a card is pretty contrived
-                    expression: >-
-                      input.0 in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
-
-      # Create or update the card as required
-      - functionRef:
-          path: minion.functions.where
-          condition:
-            functionRef:
               path: minion.functions.expression
-              expression: "input.1 is none"
-          # If the conversation has no card, create it
-          then:
+              # Getting the attached URLs for a card is pretty contrived
+              expression: >-
+                input.0._links.web.href in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
+
+      # The output of this step is an iterable of (existing card, desired state) tuples
+      - functionRef:
+          path: minion.functions.collect
+          function:
             functionRef:
-              path: minion.functions.compose
+              path: minion.functions.fork
               functions:
+                - functionRef:
+                    path: minion.functions.expression
+                    expression: input.1
                 - functionRef:
                     path: minion.functions.template
+                    globals:
+                      groups:
+                        parameterRef: "kantree.groups"
+                      active_group:
+                        parameterRef: "kantree.active_group"
+                      closed_group:
+                        parameterRef: "kantree.closed_group"
                     template: |
                       title: >-
                         {{ input.0.subject }}
                       model_name: Support Ticket
-                      attributes:
-                        - name: "Attachments"
-                          value: https://secure.helpscout.net/conversation/{{ input.0.id }}/{{ input.0.number }}
+                      {% if input.0.closedAt and input.1.state not in ['completed', 'archived'] %}
+                      state: completed
+                      {% elif not input.0.closedAt and input.1.state in ['completed', 'archived'] %}
+                      state: undecided
+                      {% endif %}
+                      {% if not input.0.closedAt %}
+                      archived: false
+                      {% endif %}
+                      links:
+                        - {{ input.0._links.web.href }}
+                      # Use groups for the fixed groups
                       groups:
                       {% for group in groups %}
                         - type: {{ group.type }}
@@ -97,45 +108,30 @@ spec:
                       {% else %}
                         []
                       {% endfor %}
-                    globals:
-                      groups:
-                        parameterRef: "kantree.groups"
-                - functionRef:
-                    path: minion.connectors.kantree.create_card
-                    session:
-                      connectorRef: "kantree"
-                    project_name:
-                      parameterRef: "kantree.project_name"
-          # If it already has a card, move it to the specified group
-          default:
+                      # Use groups{_add,_remove} for the active/closed groups
+                      {% if input.0.closedAt %}
+                      groups_add:
+                        - type: {{ closed_group.type }}
+                          name: {{ closed_group.name }}
+                      groups_remove:
+                        - type: {{ active_group.type }}
+                          name: {{ active_group.name }}
+                      {% else %}
+                      groups_add:
+                        - type: {{ active_group.type }}
+                          name: {{ active_group.name }}
+                      groups_remove:
+                        - type: {{ closed_group.type }}
+                          name: {{ closed_group.name }}
+                      {% endif %}
+
+      # Create or update the card for each item
+      - functionRef:
+          path: minion.functions.collect
+          function:
             functionRef:
-              path: minion.functions.compose
-              functions:
-                # The output of this step is a (card, updates) tuple
-                - functionRef:
-                    path: minion.functions.fork
-                    functions:
-                      - functionRef:
-                          path: minion.functions.expression
-                          expression: "input.1"
-                      - functionRef:
-                          path: minion.functions.template
-                          template: |
-                            title: >-
-                              {{ input.0.subject }}
-                            model_name: Support Ticket
-                            state: Undecided
-                            groups:
-                            {% for group in groups %}
-                              - type: {{ group.type }}
-                                name: {{ group.name }}
-                            {% else %}
-                              []
-                            {% endfor %}
-                          globals:
-                            groups:
-                              parameterRef: "kantree.groups"
-                - functionRef:
-                    path: minion.connectors.kantree.update_card
-                    session:
-                      connectorRef: "kantree"
+              path: minion.connectors.kantree.create_or_update_card
+              session:
+                connectorRef: "kantree"
+              project_name:
+                parameterRef: "kantree.project_name"

@@ -9,6 +9,11 @@ parameters:
       Name of a context in the Kantree project - a new group will be created
       for each project that a card is mirrored from
     default: Projects
+  kantree.completed_group:
+    hint: |
+      A Kantree group to apply to completed cards.
+      Should be a YAML map of the form {type: <context name>, name: <group name>}.
+    default: {type: Lists, name: Done}
 
 spec:
   functionRef:
@@ -48,37 +53,52 @@ spec:
               path: minion.functions.expression
               expression: "input.1.is_link and input.0.id == input.1.link.id"
 
-      # Throw away the tuples which already have a card
-      - functionRef:
-          path: minion.functions.select
-          predicate:
-            functionRef:
-              path: minion.functions.expression
-              expression: "input.1 is none"
-
       # Map the remaining tuples onto a mirror card structure
+      # The output of this step is an iterable of (existing card, desired state) tuples
       - functionRef:
           path: minion.functions.collect
           function:
             functionRef:
-              path: minion.functions.template
-              globals:
-                context_name:
-                  parameterRef: "kantree.context_name"
-              template: |
-                link_to: {{ input.0.id }}
-                link_has_own_attributes: "false"
-                groups:
-                  - type: {{ context_name }}
-                    name: >-
-                      {{ input.0.project.title }}
+              path: minion.functions.fork
+              functions:
+                - functionRef:
+                    path: minion.functions.expression
+                    expression: input.1
+                - functionRef:
+                    path: minion.functions.template
+                    globals:
+                      context_name:
+                        parameterRef: "kantree.context_name"
+                      completed_group:
+                        parameterRef: "kantree.completed_group"
+                    template: |
+                      # Only include the link stuff when creating
+                      {% if not input.1 %}
+                      link_to: {{ input.0.id }}
+                      link_has_own_attributes: false
+                      {% endif %}
+                      state: {{ input.0.state }}
+                      # Use groups for the fixed groups
+                      groups:
+                        - type: {{ context_name }}
+                          name: {{ input.0.project.title }}
+                      # Use groups{_add,_remove} for the completed_group
+                      {% if input.0.state == "completed" %}
+                      groups_add:
+                        - type: {{ completed_group.type }}
+                          name: {{ completed_group.name }}
+                      {% else %}
+                      groups_remove:
+                        - type: {{ completed_group.type }}
+                          name: {{ completed_group.name }}
+                      {% endif %}
 
       # Create the cards
       - functionRef:
           path: minion.functions.collect
           function:
             functionRef:
-              path: minion.connectors.kantree.create_card
+              path: minion.connectors.kantree.create_or_update_card
               session:
                 connectorRef: kantree
               project_name:
