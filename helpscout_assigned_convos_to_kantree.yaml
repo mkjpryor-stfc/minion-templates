@@ -1,36 +1,45 @@
 description: >-
-  Create Kantree cards in a project for each open issue in a GitLab project.
+  Create Kantree cards in a project for each assigned Help Scout conversation in a mailbox.
+
 
 parameters:
-  gitlab.project_name:
-    hint: Name of the GitLab project to read issues from
-    example: mpryor/jasmin-notebooks
+  helpscout.mailbox_name:
+    hint: The name of the Help Scout mailbox to fetch conversations from.
+    default: CEDA and JASMIN Helpdesk
   kantree.project_name:
-    hint: Name of the Kantree project to create cards in
-    example: My Project Name
-  kantree.context_name:
-    hint: >-
-      Name of a context in the Kantree project - a new group will be created
-      with the project name
-    default: Components
+    hint: The name of the Kantree project to create cards in.
+    example: My Kantree Project
+  kantree.groups:
+    hint: |
+      A list of Kantree groups to apply to created cards.
+      Should be formatted as a YAML list containing mappings of the form
+      { type: <context name>, name: <group name> }.
+    example: "[{type: Projects, name: Support}]"
+    default: []
+  kantree.active_group:
+    hint: |
+      A Kantree group to apply to active conversations.
+      Should be a YAML map of the form {type: <context name>, name: <group name>}.
+    default: {type: Lists, name: Priority}
   kantree.closed_group:
     hint: |
-      A Kantree group to apply to closed issues.
+      A Kantree group to apply to closed conversations.
       Should be a YAML map of the form {type: <context name>, name: <group name>}.
     default: {type: Lists, name: Done}
+
 
 spec:
   functionRef:
     path: minion.functions.compose
     functions:
       - functionRef:
-          path: minion.connectors.gitlab.issues_for_project
+          path: minion.connectors.helpscout.conversations_assigned_to_user
           session:
-            connectorRef: "gitlab"
-          project_name:
-            parameterRef: "gitlab.project_name"
+            connectorRef: "helpscout"
+          mailbox_name:
+            parameterRef: "helpscout.mailbox_name"
 
-      # The output of this step is a tuple containing two iterables - (issues, existing cards)
+      # The output of this step is a tuple containing two iterables - (conversations, cards)
       - functionRef:
           path: minion.functions.fork
           functions:
@@ -52,11 +61,11 @@ spec:
               path: minion.functions.expression
               # Getting the attached URLs for a card is pretty contrived
               expression: >-
-                input.0.web_url in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
+                input.0._links.web.href in input.1.attributes|selectattr('type', 'eq', 'files')|sum(attribute='value', start=[])|map(attribute='url')
 
       # The output of this step is an iterable of (existing card, desired state) tuples
       - functionRef:
-          path: minion.functions.collect
+          path: minion.functions.map
           function:
             functionRef:
               path: minion.functions.fork
@@ -67,41 +76,46 @@ spec:
                 - functionRef:
                     path: minion.functions.template
                     globals:
-                      project_name:
-                        parameterRef: "gitlab.project_name"
-                      context_name:
-                        parameterRef: "kantree.context_name"
+                      groups:
+                        parameterRef: "kantree.groups"
+                      active_group:
+                        parameterRef: "kantree.active_group"
                       closed_group:
                         parameterRef: "kantree.closed_group"
                     template: |
                       title: >-
-                        {{ input.0.title }}
-                      model_name: Issue
-                      {% if input.0.closed_at and input.1.state not in ['completed', 'archived'] %}
+                        {{ input.0.subject }}
+                      model_name: Support Ticket
+                      {% if input.0.closedAt and not input.1.finished %}
                       state: completed
-                      {% elif not input.0.closed_at and input.1.state in ['completed', 'archived'] %}
+                      {% elif not input.0.closedAt and input.1.finished %}
                       state: undecided
                       {% endif %}
-                      {% if not input.0.closed_at %}
+                      {% if not input.0.closedAt %}
                       archived: false
                       {% endif %}
                       links:
-                        - {{ input.0.web_url }}
+                        - {{ input.0._links.web.href }}
                       # Use groups for the fixed groups
-                      # Copy the labels from the issue - in Kantree, labels are a group type
                       groups:
-                        - type: {{ context_name }}
-                          name: {{ project_name.split("/", 1)[1] }}
-                      {% for label in input.0.labels %}
-                        - type: Labels
-                          name: {{ label }}
+                      {% for group in groups %}
+                        - type: {{ group.type }}
+                          name: {{ group.name }}
+                      {% else %}
+                        []
                       {% endfor %}
-                      # Use groups{_add,_remove} for the closed_group
-                      {% if input.0.closed_at %}
+                      # Use groups{_add,_remove} for the active/closed groups
+                      {% if input.0.closedAt %}
                       groups_add:
                         - type: {{ closed_group.type }}
                           name: {{ closed_group.name }}
+                      groups_remove:
+                        - type: {{ active_group.type }}
+                          name: {{ active_group.name }}
                       {% else %}
+                      groups_add:
+                        - type: {{ active_group.type }}
+                          name: {{ active_group.name }}
                       groups_remove:
                         - type: {{ closed_group.type }}
                           name: {{ closed_group.name }}
@@ -109,7 +123,7 @@ spec:
 
       # Create or update the card for each item
       - functionRef:
-          path: minion.functions.collect
+          path: minion.functions.map
           function:
             functionRef:
               path: minion.connectors.kantree.create_or_update_card

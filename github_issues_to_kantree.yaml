@@ -32,7 +32,7 @@ spec:
 
       # Filter out the pull requests
       - functionRef:
-          path: minion.functions.select
+          path: minion.functions.filter
           predicate:
             functionRef:
               path: minion.functions.expression
@@ -64,7 +64,7 @@ spec:
 
       # The output of this step is an iterable of (existing card, desired state) tuples
       - functionRef:
-          path: minion.functions.collect
+          path: minion.functions.map
           function:
             functionRef:
               path: minion.functions.fork
@@ -85,9 +85,9 @@ spec:
                       title: >-
                         {{ input.0.title }}
                       model_name: Issue
-                      {% if input.0.closed_at and input.1.state not in ['completed', 'archived'] %}
+                      {% if input.0.closed_at and not input.1.finished %}
                       state: completed
-                      {% elif not input.0.closed_at and input.1.state in ['completed', 'archived'] %}
+                      {% elif not input.0.closed_at and input.1.finished %}
                       state: undecided
                       {% endif %}
                       {% if not input.0.closed_at %}
@@ -117,7 +117,7 @@ spec:
 
       # Create or update the card for each item
       - functionRef:
-          path: minion.functions.collect
+          path: minion.functions.map
           function:
             functionRef:
               path: minion.connectors.kantree.create_or_update_card
