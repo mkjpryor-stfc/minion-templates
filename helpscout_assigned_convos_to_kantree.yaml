@@ -1,5 +1,5 @@
 description: >-
-  Create Kantree cards in a project for each assigned Help Scout conversation in a mailbox.
+  Create or update Kantree cards in a project for each assigned Help Scout conversation in a mailbox.
 
 
 parameters:
@@ -32,27 +32,78 @@ spec:
   functionRef:
     path: minion.functions.compose
     functions:
-      - functionRef:
-          path: minion.connectors.helpscout.conversations_assigned_to_user
-          session:
-            connectorRef: "helpscout"
-          mailbox_name:
-            parameterRef: "helpscout.mailbox_name"
+      # First, move all the current cards representing HS convos to the completed state
+      # Then move the cards for active convos to the active state
+      # This ensures that convos that are handed over but still active are removed from
+      # the active state as far as I am concerned
 
-      # The output of this step is a tuple containing two iterables - (conversations, cards)
+      - functionRef:
+          path: minion.connectors.kantree.cards_for_project
+          session:
+            connectorRef: "kantree"
+          project_name:
+            parameterRef: "kantree.project_name"
+
+      # Filter just the support tickets
+      - functionRef:
+          path: minion.functions.filter
+          predicate:
+            functionRef:
+              path: minion.functions.expression
+              expression: "input.model.name == 'Support Ticket'"
+
+      # Produce an iterable of (existing card, updates) tuples to move the cards to the closed status
+      - functionRef:
+          path: minion.functions.map
+          function:
+            functionRef:
+              path: minion.functions.fork
+              functions:
+                - functionRef:
+                    path: minion.functions.identity
+                - functionRef:
+                    path: minion.functions.template
+                    globals:
+                      groups:
+                        parameterRef: "kantree.groups"
+                      active_group:
+                        parameterRef: "kantree.active_group"
+                      closed_group:
+                        parameterRef: "kantree.closed_group"
+                    template: |
+                      state: completed
+                      groups_add:
+                        - type: {{ closed_group.type }}
+                          name: {{ closed_group.name }}
+                      groups_remove:
+                        - type: {{ active_group.type }}
+                          name: {{ active_group.name }}
+
+      # Update the cards
+      - functionRef:
+          path: minion.functions.map
+          function:
+            functionRef:
+              path: minion.connectors.kantree.create_or_update_card
+              session:
+                connectorRef: "kantree"
+              project_name:
+                parameterRef: "kantree.project_name"
+
+      # The output of this step is a tuple containing two iterables - (conversations, updated cards)
       - functionRef:
           path: minion.functions.fork
           functions:
             - functionRef:
-                path: minion.functions.identity
-            - functionRef:
-                path: minion.connectors.kantree.cards_for_project
+                path: minion.connectors.helpscout.conversations_assigned_to_user
                 session:
-                  connectorRef: "kantree"
-                project_name:
-                  parameterRef: "kantree.project_name"
+                  connectorRef: "helpscout"
+                mailbox_name:
+                  parameterRef: "helpscout.mailbox_name"
+            - functionRef:
+                path: minion.functions.identity
 
-      # The output of this step is an iterable of (issue, matching card) tuples
+      # The output of this step is an iterable of (convo, matching card) tuples
       # If there is no matching card in the project, it is None
       - functionRef:
           path: minion.functions.zip_matching
