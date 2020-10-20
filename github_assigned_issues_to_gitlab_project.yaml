@@ -1,0 +1,71 @@
+description: >-
+  Create an issue in a GitLab project for each GitHub issue assigned to the user.
+
+parameters:
+  gitlab.destination_project:
+    hint: Name of the GitLab project to create issues in
+    example: myusername/my-project
+
+spec:
+  functionRef:
+    path: minion.functions.compose
+    functions:
+      - functionRef:
+          path: minion.connectors.github.issues
+          session:
+            connectorRef: github
+          filter: assigned
+          state: all
+
+      # The output of this step is a tuple containing two iterables - (assigned issues, issues in destination project)
+      - functionRef:
+          path: minion.functions.fork
+          functions:
+            - functionRef:
+                path: minion.functions.identity
+            - functionRef:
+                path: minion.connectors.gitlab.project_issues
+                session:
+                  connectorRef: gitlab
+                project:
+                  parameterRef: gitlab.destination_project
+
+      # The output of this step is an iterable of (assigned issue, matching destination issue) tuples
+      # If there is no matching destination issue, it is None
+      - functionRef:
+          path: minion.functions.zip_matching
+          matcher:
+            functionRef:
+              path: minion.functions.expression
+              expression: input.0.html_url in input.1.description
+
+      # The output of this step is an iterable of (existing issue, desired state) tuples
+      - functionRef:
+          path: minion.functions.map
+          function:
+            functionRef:
+              path: minion.functions.fork
+              functions:
+                - functionRef:
+                    path: minion.functions.expression
+                    expression: input.1
+                - functionRef:
+                    path: minion.functions.template
+                    template: |
+                      title: {{ input.0.title | tojson }}
+                      description: "{{ input.0.html_url }}"
+                      labels: github,{{ input.0.repository.full_name }},{{ input.0.labels | map(attribute = 'name') | join(',') }}
+                      {% if input.0.state == 'closed' %}
+                      state_event: close
+                      {% endif %}
+
+      # Create or update the issue in the destination project
+      - functionRef:
+          path: minion.functions.map
+          function:
+            functionRef:
+              path: minion.connectors.gitlab.create_or_update_issue
+              session:
+                connectorRef: gitlab
+              project:
+                parameterRef: gitlab.destination_project
